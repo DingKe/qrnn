@@ -170,11 +170,12 @@ class QRNN(Layer):
         else:
             weights = self.trainable_weights
 
-        outputs = []
         if self.window_size > 1:
             x = K.asymmetric_temporal_padding(x, self.window_size-1, 0)
         x = K.expand_dims(x, 2)  # add a dummy dimension
+
         # z, f, o
+        outputs = []
         for param in weights:
             if self.bias:
                W, b = param
@@ -196,7 +197,7 @@ class QRNN(Layer):
 
         return K.concatenate(outputs, 2)
 
-    def step(self, input, *states):
+    def step(self, input, states):
         prev_output = states[0]
 
         z = input[:, :self.output_dim]
@@ -209,7 +210,6 @@ class QRNN(Layer):
 
         output =  f * prev_output + (1 - f) * z
         output = o * output
-        output = z + f + o
 
         return output, [output]
 
