@@ -13,108 +13,9 @@ import theano.tensor as T
 
 
 def _dropout(x, level, noise_shape=None, seed=None):
-    '''Sets entries in `x` to zero at random,
-    while scaling the entire tensor.
-
-    # Arguments
-        x: tensor
-        level: fraction of the entries in the tensor
-            that will be set to 0.
-        noise_shape: shape for randomly generated keep/drop flags,
-            must be broadcastable to the shape of `x`
-        seed: random seed to ensure determinism.
-    '''
-    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-    if level < 0. or level >= 1:
-        raise Exception('Dropout level must be in interval [0, 1[.')
-    if seed is None:
-        seed = np.random.randint(1, 10e6)
-
-    rng = RandomStreams(seed=seed)
-    retain_prob = 1. - level
-
-    if noise_shape is None:
-        random_tensor = rng.binomial(x.shape, p=retain_prob, dtype=x.dtype)
-    else:
-        random_tensor = rng.binomial(noise_shape, p=retain_prob, dtype=x.dtype)
-        random_tensor = T.patternbroadcast(random_tensor, [dim == 1 for dim in noise_shape])
-
-    x *= random_tensor
-    #x /= retain_prob ## no scale for QRNN
+    x = K.dropout(x, level, noise_shape, seed)
+    x *= (1. - level) # compensate for the scaling by the dropout
     return x
-
-
-def _rnn(step_function, inputs, initial_states,
-        go_backwards=False, mask=None, constants=None):
-    '''Iterates over the time dimension of a tensor.
-
-    # Arguments
-        inputs: tensor or list of tensors of temporal data of shape (samples, time, ...)
-            (at least 2D).
-        step_function:
-        initial_states: tensor with shape (samples, ...) (no time dimension),
-            containing the initial values for the states used in
-            the step function.
-        go_backwards: boolean. If True, do the iteration over
-            the time dimension in reverse order.
-        mask: binary tensor with shape (samples, time),
-            with a zero for every element that is masked.
-        constants: a list of constant values passed at each step.
-
-    # Returns
-        A tuple (last_output, outputs, new_states).
-            last_output: the latest output of the rnn, of shape (samples, ...)
-            outputs: tensor with shape (samples, time, ...) where each
-                entry outputs[s, t] is the output of the step function
-                at time t for sample s.
-            new_states: list of tensors, latest states returned by
-                the step function, of shape (samples, ...).
-    '''
-    if type(inputs) not in [list, tuple]:
-        inputs = [inputs]
-
-    ndims = set([input.ndim for input in inputs])
-    assert len(ndims) == 1, "must be the same dim"
-
-    ndim = inputs[-1].ndim
-    assert ndim >= 2, 'Input should be at least 3D.'
-
-    axes = [1, 0] + list(range(2, ndim))
-    print(axes)
-    inputs = [input.dimshuffle(axes) for input in inputs]
-
-    if constants is None:
-        constants = []
-
-    if mask is not None:
-        assert "mask is not supported yet!"
-    else:
-        def _step(*inputs):
-            output, new_states = step_function(*inputs)
-            return [output] + new_states
-
-        results, _ = theano.scan(
-            _step,
-            sequences=inputs,
-            outputs_info=[None] + initial_states,
-            non_sequences=constants,
-            go_backwards=go_backwards)
-
-        # deal with Theano API inconsistency
-        if type(results) is list:
-            outputs = results[-1]
-            states = results[0:]
-        else:
-            outputs = results
-            states = []
-
-    outputs = T.squeeze(outputs)
-    last_output = outputs[-2]
-
-    axes = [1, 0] + list(range(2, outputs.ndim))
-    outputs = outputs.dimshuffle(axes)
-    states = [T.squeeze(state[-2]) for state in states]
-    return last_output, outputs, states
 
 
 class QRNN(Layer):
@@ -248,7 +149,7 @@ class QRNN(Layer):
         constants = self.get_constants(x)
         preprocessed_input = self.preprocess_input(x)
 
-        last_output, outputs, states = _rnn(self.step, preprocessed_input,
+        last_output, outputs, states = K.rnn(self.step, preprocessed_input,
                                             initial_states,
                                             go_backwards=self.go_backwards,
                                             mask=mask,
@@ -293,15 +194,18 @@ class QRNN(Layer):
             f = K.in_train_phase(1 - _dropout(1 - K.sigmoid(f), self.dropout), K.sigmoid(f))
             outputs[1] = f
 
-        return outputs
+        return K.concatenate(outputs, 2)
 
-    def step(self, *inputs):
-        xs, states = inputs[:3], inputs[3:]
+    def step(self, input, *states):
         prev_output = states[0]
 
-        z = self.activation(xs[0])
-        f = xs[1] if self.dropout else K.sigmoid(xs[1])
-        o = K.sigmoid(xs[2])
+        z = input[:, :self.output_dim]
+        f = input[:, self.output_dim:2 * self.output_dim]
+        o = input[:, 2 * self.output_dim:]
+
+        z = self.activation(z)
+        f = f if self.dropout else K.sigmoid(f)
+        o = K.sigmoid(o)
 
         output =  f * prev_output + (1 - f) * z
         output = o * output

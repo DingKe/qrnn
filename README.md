@@ -1,4 +1,4 @@
-A trail implemention of QRNN-fo with dropout for Keras (only theano backend, yet)
+A trail implemention of QRNN-fo with dropout for Keras
 
 Run the demo:
 python imbd_qrnn.py
