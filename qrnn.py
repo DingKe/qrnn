@@ -55,7 +55,7 @@ class QRNN(Layer):
         self.b_constraint = constraints.get(b_constraint)
 
         self.dropout = dropout
-        if self.dropout:
+        if self.dropout is not None and 0. < self.dropout < 1.:
             self.uses_learning_phase = True
         self.initial_weights = weights
 
@@ -82,17 +82,28 @@ class QRNN(Layer):
         self.W_f = self.init(self.W_shape, name='{}_W_f'.format(self.name))
         self.W_o = self.init(self.W_shape, name='{}_W_o'.format(self.name))
         self.trainable_weights = [self.W_z, self.W_f, self.W_o]
-        self.W = None # TODO: concatenate Ws
+        self.W = K.concatenate([self.W_z, self.W_f, self.W_o], 1) 
 
         if self.bias:
             self.b_z = K.zeros((self.output_dim,), name='{}_b_z'.format(self.name))
             self.b_f = K.zeros((self.output_dim,), name='{}_b_f'.format(self.name))
             self.b_o = K.zeros((self.output_dim,), name='{}_b_o'.format(self.name))
             self.trainable_weights += [self.b_z, self.b_f, self.b_o]
+            self.b = K.concatenate([self.b_z, self.b_f, self.b_o])
 
-            self.b = None # TODO: concatenate bs
+        self.regularizers = []
+        if self.W_regularizer:
+            self.W_regularizer.set_param(self.W)
+            self.regularizers.append(self.W_regularizer)
+        if self.bias and self.b_regularizer:
+            self.b_regularizer.set_param(self.b)
+            self.regularizers.append(self.b_regularizer)
 
-         # TODO apply regularizers and constraints
+        self.constraints = {}
+        if self.W_constraint:
+            self.constraints[self.W] = self.W_constraint
+        if self.bias and self.b_constraint:
+            self.constraints[self.b] = self.b_constraint
 
         if self.initial_weights is not None:
             self.set_weights(self.initial_weights)
@@ -190,10 +201,9 @@ class QRNN(Layer):
 
             outputs.append(output)
 
-        if self.dropout:
-            f = outputs[1]
-            f = K.in_train_phase(1 - _dropout(1 - K.sigmoid(f), self.dropout), K.sigmoid(f))
-            outputs[1] = f
+        if self.dropout is not None and 0. < self.dropout < 1.:
+            f = K.sigmoid(outputs[1])
+            outputs[1] = K.in_train_phase(1 - _dropout(1 - f, self.dropout), f)
 
         return K.concatenate(outputs, 2)
 
@@ -205,10 +215,10 @@ class QRNN(Layer):
         o = input[:, 2 * self.output_dim:]
 
         z = self.activation(z)
-        f = f if self.dropout else K.sigmoid(f)
+        f = f if self.dropout is not None and 0. < self.dropout < 1. else K.sigmoid(f)
         o = K.sigmoid(o)
 
-        output =  f * prev_output + (1 - f) * z
+        output = f * prev_output + (1 - f) * z
         output = o * output
 
         return output, [output]

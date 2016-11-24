@@ -10,13 +10,15 @@ from keras.utils import np_utils
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, Activation, Embedding
 from keras.layers import LSTM, SimpleRNN, GRU
+from keras.regularizers import l2
+from keras.constraints import maxnorm
 from keras.datasets import imdb
 
 from qrnn import QRNN
 
 max_features = 20000
 maxlen = 80  # cut texts after this number of words (among top max_features most common words)
-batch_size = 32
+batch_size = 32 
 
 print('Loading data...')
 (X_train, y_train), (X_test, y_test) = imdb.load_data(nb_words=max_features)
@@ -32,7 +34,9 @@ print('X_test shape:', X_test.shape)
 print('Build model...')
 model = Sequential()
 model.add(Embedding(max_features, 128, dropout=0.2))
-model.add(QRNN(128, dropout=0.2))
+model.add(QRNN(128, window_size=3, dropout=0.2, 
+               W_regularizer=l2(1e-4), b_regularizer=l2(1e-4), 
+               W_constraint=maxnorm(10), b_constraint=maxnorm(10)))
 model.add(Dense(1))
 model.add(Activation('sigmoid'))
 
